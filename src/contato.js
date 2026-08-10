@@ -13,6 +13,8 @@
 // cofre. O que realmente protege contra clone é registrar o domínio próprio e
 // denunciar a cópia.
 
+import { codigoRastreio } from "./rastreio.js";
+
 const CHAVE = 0x5b;
 
 // XOR + base64: as strings originais não existem no arquivo publicado.
@@ -59,9 +61,12 @@ export const abrirWhatsApp = (texto) => {
     window.alert(AVISO_CLONE);
     return false;
   }
-  const url = `https://wa.me/${zap()}?text=${encodeURIComponent(
-    texto ?? mensagemPadrao()
-  )}`;
+  let mensagem = texto ?? mensagemPadrao();
+  // Anexa o código de origem (utm/referrer) no fim da mensagem — o sistema
+  // que recebe decodifica e remove a linha. Ver src/rastreio.js.
+  const cod = codigoRastreio();
+  if (cod) mensagem += `\n\ncod: ${cod}`;
+  const url = `https://wa.me/${zap()}?text=${encodeURIComponent(mensagem)}`;
   window.open(url, "_blank", "noopener,noreferrer");
   return true;
 };
