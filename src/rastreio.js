@@ -6,16 +6,17 @@
 //
 // SOLUÇÃO: na chegada, guardamos utm_* + referrer em localStorage
 // (validade de 7 dias — se a pessoa voltar amanhã por acesso direto, a
-// campanha original continua valendo). No clique, isso vira UMA linha
-// curta no fim da mensagem, tipo:
+// campanha original continua valendo). No clique, isso vira uma frase
+// em português no fim da mensagem:
 //
-//     ref: ig/ps/agosto-2026/reel-01
+//     Vim pelo Instagram (agosto-2026 · reel-01)
 //
-// POR QUE CURTO E LEGÍVEL: quem envia a mensagem é a pessoa, e ela lê o
-// texto antes de apertar enviar. Um bloco longo de caracteres aleatórios
-// parece código malicioso e faz o lead apagar (ou desistir). Uma linha
-// curta e reconhecível passa despercebida. O backend expande as siglas de
-// volta ("ig" -> "instagram") antes de gravar no funil.
+// POR QUE UMA FRASE E NÃO UM CÓDIGO: quem envia a mensagem é a pessoa, e
+// ela lê o texto antes de apertar enviar. Qualquer coisa com cara de
+// código ("cod: aWd...", "ref: ig/ps/...") assusta e faz o lead apagar ou
+// desistir. Uma frase que ela mesma poderia ter escrito passa natural.
+// O backend lê essa frase e transforma de volta em utm_source/medium/
+// campaign/content antes de gravar no funil.
 //
 // PRIVACIDADE: nada aqui identifica a pessoa — são só parâmetros da URL
 // da campanha e o domínio de onde ela veio. Nenhum dado sai do navegador
@@ -24,28 +25,37 @@
 const CHAVE_STORAGE = "rastreio_origem_v1";
 const VALIDADE_MS = 7 * 24 * 60 * 60 * 1000; // 7 dias
 
-// Siglas para as origens mais comuns — o backend tem a tabela inversa
-// (supabase/functions/_shared/lead-parsing.ts). Origem desconhecida vai
-// truncada em texto puro; nada quebra.
-const SIGLA_SOURCE = {
-  instagram: "ig", facebook: "fb", google: "gg", youtube: "yt",
-  tiktok: "tt", linkedin: "li", whatsapp: "wa", email: "em",
-};
-const SIGLA_MEDIUM = {
-  paid_social: "ps", social: "s", cpc: "c", ppc: "c", organic: "o",
-  email: "e", referral: "r", display: "d", video: "v",
+// Nome de exibição das origens conhecidas. O backend tem a tabela inversa
+// (supabase/functions/_shared/lead-parsing.ts). Origem fora da lista entra
+// capitalizada, em texto puro; nada quebra.
+const NOME_SOURCE = {
+  instagram: "Instagram", facebook: "Facebook", google: "Google",
+  youtube: "YouTube", tiktok: "TikTok", linkedin: "LinkedIn",
+  whatsapp: "WhatsApp", email: "E-mail", threads: "Threads",
 };
 
-// Limites por campo: mantêm a linha por volta de 40 caracteres.
-const LIM_CAMPANHA = 16;
-const LIM_CRIATIVO = 12;
+// Preposição certa pra frase soar natural em português.
+const ARTIGO = { "E-mail": "por", Threads: "pelo" };
+const preposicao = (nome) => ARTIGO[nome] || (/^[AI]/.test(nome) ? "pelo" : "pelo");
 
-const enxugar = (v, max) =>
-  String(v || "")
+// Limites por campo: mantêm a frase curta.
+const LIM_CAMPANHA = 18;
+const LIM_CRIATIVO = 14;
+
+// Corta no último separador em vez de no meio da palavra: "agentes-agosto-2026"
+// vira "agentes-agosto", não "agentes-agosto-202".
+const enxugar = (v, max) => {
+  const limpo = String(v || "")
     .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")   // barra é separador; espaço vira hífen
-    .replace(/^-+|-+$/g, "")
-    .slice(0, max);
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (limpo.length <= max) return limpo;
+  const cortado = limpo.slice(0, max);
+  const sep = Math.max(cortado.lastIndexOf("-"), cortado.lastIndexOf("_"), cortado.lastIndexOf("."));
+  return (sep >= max * 0.5 ? cortado.slice(0, sep) : cortado).replace(/[-_.]+$/, "");
+};
+
+const capitalizar = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : "");
 
 const lerStorage = () => {
   try {
@@ -98,33 +108,34 @@ export const capturarRastreio = () => {
 };
 
 /**
- * Linha curta de origem para o fim da mensagem do WhatsApp.
- * Formato: "source/medium/campanha/criativo" (campos vazios viram "-",
- * e os "-" do fim somem). Retorna "" quando não há nada a rastrear —
- * nesse caso a mensagem sai exatamente como era antes.
+ * Frase de origem para o fim da mensagem do WhatsApp, ex.:
+ *   "Vim pelo Instagram (agosto-2026 · reel-01)"
+ * Retorna "" quando não há origem conhecida — nesse caso a mensagem sai
+ * exatamente como era antes, sem nenhuma linha extra.
  */
 export const codigoRastreio = () => {
   const dado = lerStorage();
   if (!dado) return "";
 
   // Sem utm_source (tráfego orgânico), o domínio de origem vira a source:
-  // "l.instagram.com" -> "instagram". É o dado que o Marcos quer ver.
+  // "l.instagram.com" -> "instagram". É o dado que interessa no funil.
   let source = enxugar(dado.utm_source, 20);
   if (!source && dado.referrer) {
     const host = String(dado.referrer).replace(/^www\./, "");
-    const conhecido = Object.keys(SIGLA_SOURCE).find((k) => host.includes(k));
-    source = conhecido || enxugar(host.split(".")[0], 12);
+    const conhecido = Object.keys(NOME_SOURCE).find((k) => host.includes(k));
+    source = conhecido || enxugar(host.split(".")[0], 14);
   }
+  if (!source) return ""; // sem origem, nada a dizer
 
-  const partes = [
-    SIGLA_SOURCE[source] || source,
-    SIGLA_MEDIUM[enxugar(dado.utm_medium, 20)] || enxugar(dado.utm_medium, 8),
+  const nome = NOME_SOURCE[source] || capitalizar(source);
+
+  // Detalhe da campanha entre parênteses. O medium não entra na frase:
+  // "social"/"cpc" não dizem nada pra quem lê, e o backend consegue
+  // inferir pela campanha. Fica guardado no localStorage de qualquer forma.
+  const detalhe = [
     enxugar(dado.utm_campaign, LIM_CAMPANHA),
     enxugar(dado.utm_content, LIM_CRIATIVO),
-  ].map((p) => p || "-");
+  ].filter(Boolean).join(" · ");
 
-  while (partes.length && partes[partes.length - 1] === "-") partes.pop();
-  if (!partes.length || partes.every((p) => p === "-")) return "";
-
-  return partes.join("/");
+  return `Vim ${preposicao(nome)} ${nome}${detalhe ? ` (${detalhe})` : ""}`;
 };

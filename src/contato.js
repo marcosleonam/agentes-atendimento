@@ -62,10 +62,11 @@ export const abrirWhatsApp = (texto) => {
     return false;
   }
   let mensagem = texto ?? mensagemPadrao();
-  // Anexa a origem (utm/referrer) numa linha curta no fim — o sistema que
-  // recebe lê, grava no funil e remove a linha. Ver src/rastreio.js.
-  const cod = codigoRastreio();
-  if (cod) mensagem += `\n\nref: ${cod}`;
+  // Fecha a mensagem contando de onde a pessoa veio ("Vim pelo Instagram
+  // (...)"). O sistema que recebe lê essa frase, grava a origem no funil e
+  // tira a linha do texto antes de mostrar pro agente. Ver src/rastreio.js.
+  const origem = codigoRastreio();
+  if (origem) mensagem += `\n\n${origem}`;
   const url = `https://wa.me/${zap()}?text=${encodeURIComponent(mensagem)}`;
   window.open(url, "_blank", "noopener,noreferrer");
   return true;
