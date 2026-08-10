@@ -62,10 +62,10 @@ export const abrirWhatsApp = (texto) => {
     return false;
   }
   let mensagem = texto ?? mensagemPadrao();
-  // Anexa o código de origem (utm/referrer) no fim da mensagem — o sistema
-  // que recebe decodifica e remove a linha. Ver src/rastreio.js.
+  // Anexa a origem (utm/referrer) numa linha curta no fim — o sistema que
+  // recebe lê, grava no funil e remove a linha. Ver src/rastreio.js.
   const cod = codigoRastreio();
-  if (cod) mensagem += `\n\ncod: ${cod}`;
+  if (cod) mensagem += `\n\nref: ${cod}`;
   const url = `https://wa.me/${zap()}?text=${encodeURIComponent(mensagem)}`;
   window.open(url, "_blank", "noopener,noreferrer");
   return true;

@@ -4,12 +4,18 @@
 // clica no botão, a origem dele (anúncio, campanha, criativo) se perdia —
 // todo lead chegava como "whatsapp" no funil.
 //
-// SOLUÇÃO: na chegada, guardamos utm_* + referrer + página em localStorage
+// SOLUÇÃO: na chegada, guardamos utm_* + referrer em localStorage
 // (validade de 7 dias — se a pessoa voltar amanhã por acesso direto, a
-// campanha original continua valendo). No clique, isso vira um código
-// compacto ("cod: ...") anexado ao FIM da mensagem do WhatsApp. O sistema
-// que recebe a mensagem decodifica o código, preenche a origem do lead e
-// remove a linha do texto.
+// campanha original continua valendo). No clique, isso vira UMA linha
+// curta no fim da mensagem, tipo:
+//
+//     ref: ig/ps/agosto-2026/reel-01
+//
+// POR QUE CURTO E LEGÍVEL: quem envia a mensagem é a pessoa, e ela lê o
+// texto antes de apertar enviar. Um bloco longo de caracteres aleatórios
+// parece código malicioso e faz o lead apagar (ou desistir). Uma linha
+// curta e reconhecível passa despercebida. O backend expande as siglas de
+// volta ("ig" -> "instagram") antes de gravar no funil.
 //
 // PRIVACIDADE: nada aqui identifica a pessoa — são só parâmetros da URL
 // da campanha e o domínio de onde ela veio. Nenhum dado sai do navegador
@@ -18,20 +24,28 @@
 const CHAVE_STORAGE = "rastreio_origem_v1";
 const VALIDADE_MS = 7 * 24 * 60 * 60 * 1000; // 7 dias
 
-// Ordem fixa dos campos — TEM que bater com o decodificador do backend
-// (supabase/functions/_shared/lead-parsing.ts, TRACKING_FIELDS).
-const CAMPOS = [
-  "utm_source", "utm_medium", "utm_campaign", "utm_content",
-  "utm_term", "referrer", "landing_page", "ts_min",
-];
-
-// base64url com suporte a acentos (btoa puro quebra com unicode)
-const b64url = (str) => {
-  const bytes = new TextEncoder().encode(str);
-  let bin = "";
-  bytes.forEach((b) => (bin += String.fromCharCode(b)));
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+// Siglas para as origens mais comuns — o backend tem a tabela inversa
+// (supabase/functions/_shared/lead-parsing.ts). Origem desconhecida vai
+// truncada em texto puro; nada quebra.
+const SIGLA_SOURCE = {
+  instagram: "ig", facebook: "fb", google: "gg", youtube: "yt",
+  tiktok: "tt", linkedin: "li", whatsapp: "wa", email: "em",
 };
+const SIGLA_MEDIUM = {
+  paid_social: "ps", social: "s", cpc: "c", ppc: "c", organic: "o",
+  email: "e", referral: "r", display: "d", video: "v",
+};
+
+// Limites por campo: mantêm a linha por volta de 40 caracteres.
+const LIM_CAMPANHA = 16;
+const LIM_CRIATIVO = 12;
+
+const enxugar = (v, max) =>
+  String(v || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")   // barra é separador; espaço vira hífen
+    .replace(/^-+|-+$/g, "")
+    .slice(0, max);
 
 const lerStorage = () => {
   try {
@@ -78,21 +92,39 @@ export const capturarRastreio = () => {
     localStorage.setItem(CHAVE_STORAGE, JSON.stringify({
       ...utm,
       referrer,
-      landing_page: window.location.pathname + window.location.search.slice(0, 80),
-      ts_min: String(Math.floor(Date.now() / 60000)),
       salvoEm: Date.now(),
     }));
   } catch { /* nunca deixar rastreio quebrar a página */ }
 };
 
 /**
- * Código compacto para anexar à mensagem do WhatsApp.
- * Retorna "" se não houver nada rastreado (mensagem sai limpa).
+ * Linha curta de origem para o fim da mensagem do WhatsApp.
+ * Formato: "source/medium/campanha/criativo" (campos vazios viram "-",
+ * e os "-" do fim somem). Retorna "" quando não há nada a rastrear —
+ * nesse caso a mensagem sai exatamente como era antes.
  */
 export const codigoRastreio = () => {
   const dado = lerStorage();
   if (!dado) return "";
-  const linha = CAMPOS.map((c) => String(dado[c] || "").replace(/\|/g, "/")).join("|");
-  if (linha.replace(/\|/g, "") === "") return "";
-  return b64url(linha);
+
+  // Sem utm_source (tráfego orgânico), o domínio de origem vira a source:
+  // "l.instagram.com" -> "instagram". É o dado que o Marcos quer ver.
+  let source = enxugar(dado.utm_source, 20);
+  if (!source && dado.referrer) {
+    const host = String(dado.referrer).replace(/^www\./, "");
+    const conhecido = Object.keys(SIGLA_SOURCE).find((k) => host.includes(k));
+    source = conhecido || enxugar(host.split(".")[0], 12);
+  }
+
+  const partes = [
+    SIGLA_SOURCE[source] || source,
+    SIGLA_MEDIUM[enxugar(dado.utm_medium, 20)] || enxugar(dado.utm_medium, 8),
+    enxugar(dado.utm_campaign, LIM_CAMPANHA),
+    enxugar(dado.utm_content, LIM_CRIATIVO),
+  ].map((p) => p || "-");
+
+  while (partes.length && partes[partes.length - 1] === "-") partes.pop();
+  if (!partes.length || partes.every((p) => p === "-")) return "";
+
+  return partes.join("/");
 };
